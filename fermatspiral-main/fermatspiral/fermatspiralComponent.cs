@@ -11,6 +11,7 @@ using Grasshopper.Kernel.Data;
 using Grasshopper.Kernel.Geometry;
 using Grasshopper.Kernel.Geometry.Delaunay;
 using Grasshopper.Kernel.Types;
+using Rhino;
 using Rhino.Geometry;
 using Rhino.Geometry.Intersect;
 using Rhino.Render.ChangeQueue;
@@ -75,9 +76,10 @@ namespace fermatspiral
             List<Curve> curveFermat = new List<Curve>();
 
             List<Point3d> cenPt = new List<Point3d>();
-
+            Dictionary<int, List<Curve>>curveDic = new Dictionary<int, List<Curve>>();
             Dictionary<int, List< Curve>> fCrvDic = new Dictionary<int,List<Curve>>();
             Dictionary<int, List<Curve>> fDic = new Dictionary<int, List<Curve>>();
+            Dictionary<int,List<int>>curveLenDic = new  Dictionary<int, List<int>>();
 
             //Point3d attraPoint = new Point3d (0, 0, 0);
             List<Point3d>attraPt = new List<Point3d>(); 
@@ -99,6 +101,8 @@ namespace fermatspiral
             int pathb = 0;
             fCrvDic.Add(0,new List<Curve>());
             fDic.Add(0, new List<Curve>());
+            curveDic.Add(0, new List<Curve>());
+            curveLenDic.Add (0, new List<int>());
             int branchCount = 1;
 
             #region sort groups
@@ -109,6 +113,9 @@ namespace fermatspiral
                 var curveToAdd = curveList[curveList.Paths[i]];
                 foreach (var item in curveToAdd)
                   {
+                    curveDic[pathA].Add(item.Value);
+                    curveLenDic[pathA].Add((int)item.Value.GetLength());
+                    var check = item.Value.GetLength();
                     var newItem = new GH_Curve( Rebuild(item.Value, divLen));
 
                     if (newItem.Value.GetLength() > divLen)
@@ -128,6 +135,8 @@ namespace fermatspiral
                     patha++;
                     fCrvDic.Add(patha,new List<Curve>());
                     fDic.Add(patha, new List<Curve>());
+                    curveDic.Add(patha, new List<Curve>());
+                    curveLenDic.Add(patha, new List<int>());
                     branchCount = 1;
                 }
             }
@@ -157,6 +166,7 @@ namespace fermatspiral
                 {
                     foreach(var item in curveGroup[curveGroup.Paths[j]])
                     {
+                        
                         var newItem = Rebuild(item.Value,divLen);
                         cList.Add(newItem);
                         var see = newItem.GetLength();
@@ -191,43 +201,65 @@ namespace fermatspiral
             for(int j = 0; j<fCrvDic.Count; j++)
             {
                 var crvToSort = fCrvDic[j];
+                List<int> lenL = new List<int>();
+                //var item = crvToSort[j];
 
-                #region // find inclusion relationships
-                List<Curve> cenCrv = new List<Curve>();
-                
-                foreach(var item in crvToSort)
+                    #region // find inclusion relationships
+                    List<Curve> cenCrv = new List<Curve>();
+                for(int k = 0; k < crvToSort.Count; k++)
                 {
-                    if (item.GetLength() < offsetDis)
-                    {
-                        cenCrv.Add(item);
-                    }
-                    else
-                    {
-                        var b = Brep.CreatePlanarBreps(item);
-
-                        AreaMassProperties amp = AreaMassProperties.Compute(b);
-                        Point3d centP = amp.Centroid;
-
-                        var result = item.Offset(centP, Vector3d.ZAxis, offsetDis, 0, CurveOffsetCornerStyle.Smooth);
-
-                        if (result == null)
+                    var item = crvToSort[k];
+                    bool s = InsideCrv(item, curveDic[j][0], offsetDis);
+                        if (s)
                         {
-                            cenCrv.Add(item);
-
-                        }
-                        else
-                        {
-                            var res = Curve.JoinCurves(result);
-                            var len = res[0].GetLength();
-
-                            if (item.GetLength() < len || len<offsetDis)
+                            if (item.GetLength() < offsetDis)
                             {
                                 cenCrv.Add(item);
                             }
+                            else
+                            {
+                                var b = Brep.CreatePlanarBreps(item);
+
+                                AreaMassProperties amp = AreaMassProperties.Compute(b);
+                                Point3d centP = amp.Centroid;
+
+                                var result = item.Offset(centP, Vector3d.ZAxis, offsetDis, 0, CurveOffsetCornerStyle.Smooth);
+                                var result1 = item.Offset(centP, Vector3d.ZAxis, -offsetDis, 0, CurveOffsetCornerStyle.Smooth);
+
+                                if (result == null || result1 == null)
+                                {
+                                    cenCrv.Add(item);
+                                }
+                                else
+                                {
+                                    List<Curve> resL = new List<Curve>();
+                                    var res = Curve.JoinCurves(result);
+                                    var res1 = Curve.JoinCurves(result1);
+                                    resL.Add(res[0]);
+                                    resL.Add(res1[0]);
+
+                                    resL.OrderByDescending(x => x.GetLength());
+
+                                    var len = res[0].GetLength();
+                                    var len1 = res1[0].GetLength();
+                                int L = (int)resL.Last().GetLength();
+
+                                bool dir = Curve.DoDirectionsMatch(res.Last(),item);
+                                //bool dir = curveLenDic[j].Contains(L);
+                                    if ( L < offsetDis||dir == false)
+                                    //if (dot<0)
+                                    {
+                                        cenCrv.Add(item);
+                                    }
+
+
+                                }
+                            }
+
                         }
-                    }
 
                 }
+
                 var see = cenCrv;
                 //DA.SetDataList(2,cenCrv);
 
@@ -266,25 +298,30 @@ namespace fermatspiral
                     {
                         var outC = cts[p];
 
-                        if (InsideCrv(crv, outC, offsetDis))
-                        {
-                            crvList.Add(outC);
+                            if (InsideCrv(crv, outC, offsetDis))
+                            {
+                                crvList.Add(outC);
 
-                            cts.RemoveAt(p);
+                                cts.RemoveAt(p);
 
-                            sortGroup.Append(new GH_Curve(outC), fPath);
-                        }
-                        //else
-                       // {
-                            //lastCrv.Add(outC);
-                        //}
+                                sortGroup.Append(new GH_Curve(outC), fPath);
+                            }
+
                     }
 
                     index++;
 
                     // cenCrv = lastCrv;
                     crvList.Reverse();
-                    var ferC = ConstructFermat(crvList, centP, offsetDis, divLen);
+                    var cl = new List<Curve>();
+                    foreach (var cc in crvList)
+                    {
+                        if (cc.GetLength() >= offsetDis * 2)
+                        {
+                            cl.Add(cc); 
+                        }
+                    }
+                    var ferC = ConstructFermat(cl, centP, offsetDis, divLen);
                     fDic[j].Add(ferC);
                     curveFermat.Add(ferC);
                   
@@ -322,32 +359,42 @@ namespace fermatspiral
             List<Point3d> sinPt = new List<Point3d>();
 
             List<Point3d>collPt = new List<Point3d>();  
-            foreach (var curve in curveList)
-            {
 
-                bool flag =  curve.ClosestPoint(pointList, out t);
+            for (int i = 0; i < curveList.Count; i++)
+            {
+                Curve curve = curveList[i];
+
+                bool flag = curve.ClosestPoint(pointList, out t);
                 if (flag)
                 {
-                    Point3d sPoint =  curve.PointAt(t);
+                    Point3d sPoint = curve.PointAt(t);
                     curve.ChangeClosedCurveSeam(t);
                     if (!Curve.DoDirectionsMatch(curve, curveList.Last()))
                     {
                         curve.Reverse();
                     }
-                    Point3d ePoint =  curve.PointAtLength(offsetDis);
+                    Point3d ePoint = curve.PointAtLength(offsetDis);
 
-                    curve.LengthParameter(offsetDis*2, out l);
+                    if(i == curveList.Count - 1)
+                    {
+                        curve.LengthParameter(offsetDis , out l);
+                    }
+                    
+                    else
+                    {
+                        curve.LengthParameter(offsetDis * 2, out l);
+                    }
 
+                    c = curve.Trim(l, t);
 
-                        c = curve.Trim(l, t);
-
-                    if (c !=null)
+                    if (c != null )
                     {
                         curveL.Add(c);
                     }
 
                 }
             }
+
             
             for (int i =0; i < curveL.Count; i++)
             {
@@ -413,15 +460,19 @@ namespace fermatspiral
         {
             List<Point3d> collPt = new List<Point3d>();
             var cl = curve.DuplicateSegments();
-            foreach(var item in cl)
-            {
-                collPt.Add(item.PointAtStart);
-            }
-            
-            if (curve.ToString() == "Rhino.Geometry.NurbsCurve")
+
+            if (curve.ToString() != "Rhino.Geometry.PolylineCurve")
             {
                 var ptToAdd = curve.DivideEquidistant(divLen);
                 collPt.AddRange(ptToAdd);
+            }
+            else
+            {
+                foreach (var item in cl)
+                {
+                    collPt.Add(item.PointAtStart);
+                }
+
             }
 
             collPt.Add(collPt[0]);
